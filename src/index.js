@@ -13,7 +13,7 @@ const app = express();
 // CORS – cho frontend Vite
 app.use(
   cors({
-    origin: "http://localhost:5173", // sau này có domain khác thì sửa
+    origin: "http://localhost:3000", // sau này có domain khác thì sửa
     credentials: true,
   })
 );
