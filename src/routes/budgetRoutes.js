@@ -16,5 +16,6 @@ router.put("/current", budgetController.upsertCurrentBudget);
 
 // (option) GET /api/budgets/history?months=6
 router.get("/history", budgetController.listHistory);
-
+// GET /api/budgets/alerts?days=30
+router.get("/alerts", budgetController.listAlerts);
 module.exports = router;

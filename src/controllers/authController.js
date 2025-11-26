@@ -134,17 +134,12 @@ async function forgotPassword(req, res) {
       });
     }
 
-    const result = await authService.startPasswordReset(email);
+    await authService.startPasswordReset(email);
 
     return res.json({
       status: "success",
       message:
         "Nếu email tồn tại trong hệ thống, chúng tôi đã gửi mã xác nhận.",
-      // DEV ONLY: để cho Postman/FE test
-      dev:
-        process.env.NODE_ENV !== "production" && result
-          ? { resetToken: result.rawToken }
-          : undefined,
     });
   } catch (err) {
     console.error("forgotPassword error:", err);
@@ -192,6 +187,46 @@ async function resetPassword(req, res) {
     });
   }
 }
+async function changePassword(req, res) {
+  try {
+    const userId = req.user.id;
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        status: "error",
+        message: "currentPassword và newPassword là bắt buộc",
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        status: "error",
+        message: "Mật khẩu mới phải có ít nhất 6 ký tự",
+      });
+    }
+
+    await authService.changePassword(userId, currentPassword, newPassword);
+
+    return res.json({
+      status: "success",
+      message: "Đổi mật khẩu thành công",
+    });
+  } catch (err) {
+    if (err.type === "INVALID_CURRENT_PASSWORD") {
+      return res.status(400).json({
+        status: "error",
+        message: "Mật khẩu hiện tại không đúng",
+      });
+    }
+
+    console.error("changePassword error:", err);
+    return res.status(500).json({
+      status: "error",
+      message: "Lỗi server khi đổi mật khẩu",
+    });
+  }
+}
 
 module.exports = {
   register,
@@ -200,4 +235,5 @@ module.exports = {
   updateProfile,
   forgotPassword,
   resetPassword,
+  changePassword,
 };

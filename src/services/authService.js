@@ -3,7 +3,7 @@ const pool = require("../db");
 const { signToken } = require("../utils/jwt");
 const crypto = require("crypto");
 const SALT_ROUNDS = 10;
-
+const { sendPasswordResetEmail } = require("./emailService");
 async function registerUser({ fullName, email, password }) {
   const client = await pool.connect();
   try {
@@ -177,10 +177,11 @@ async function startPasswordReset(email) {
 
   const userId = userRes.rows[0].user_id;
 
-  const rawToken = crypto.randomBytes(32).toString("hex");
-  const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+  const rawCode = String(Math.floor(100000 + Math.random() * 900000));
 
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1h
+  const tokenHash = crypto.createHash("sha256").update(rawCode).digest("hex");
+
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 phút
 
   await pool.query(
     `
@@ -190,16 +191,18 @@ async function startPasswordReset(email) {
     [userId, tokenHash, expiresAt]
   );
 
-  // log mail (dev mode)
+  // Gửi email reset thật
+
+  await sendPasswordResetEmail({ to: normalizedEmail, code: rawCode });
   await pool.query(
     `
     INSERT INTO email_logs (user_id, subject, content, status)
     VALUES ($1, $2, $3, 'sent')
     `,
-    [userId, "Password reset", `DEV ONLY - Reset token: ${rawToken}`]
+    [userId, "Password reset", `Code: ${rawCode}`]
   );
 
-  return { rawToken }; // chỉ trả về cho dev test
+  return null;
 }
 
 async function resetPasswordWithToken(rawToken, newPassword) {
@@ -246,6 +249,43 @@ async function resetPasswordWithToken(rawToken, newPassword) {
 
   return { userId };
 }
+async function changePassword(userId, currentPassword, newPassword) {
+  // Lấy user + password_hash hiện tại
+  const result = await pool.query(
+    `SELECT password_hash FROM users WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (result.rows.length === 0) {
+    const err = new Error("USER_NOT_FOUND");
+    err.type = "USER_NOT_FOUND";
+    throw err;
+  }
+
+  const user = result.rows[0];
+
+  // So sánh mật khẩu hiện tại
+  const ok = await bcrypt.compare(currentPassword, user.password_hash);
+  if (!ok) {
+    const err = new Error("INVALID_CURRENT_PASSWORD");
+    err.type = "INVALID_CURRENT_PASSWORD";
+    throw err;
+  }
+
+  // Hash mật khẩu mới
+  const newHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+  await pool.query(
+    `
+      UPDATE users
+      SET password_hash = $1, updated_at = now()
+      WHERE user_id = $2
+    `,
+    [newHash, userId]
+  );
+
+  return { userId };
+}
 
 module.exports = {
   registerUser,
@@ -254,4 +294,5 @@ module.exports = {
   updateProfile,
   startPasswordReset,
   resetPasswordWithToken,
+  changePassword,
 };

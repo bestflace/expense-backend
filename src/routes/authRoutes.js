@@ -14,5 +14,8 @@ router.post("/forgot-password", authController.forgotPassword);
 router.post("/reset-password", authController.resetPassword);
 // Lấy thông tin user hiện tại
 router.get("/me", authMiddleware, authController.me);
+// Cập nhật thông tin user
 router.put("/me", authMiddleware, authController.updateProfile);
+// Đổi mật khẩu
+router.post("/change-password", authMiddleware, authController.changePassword);
 module.exports = router;

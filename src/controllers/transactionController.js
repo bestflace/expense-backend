@@ -1,5 +1,6 @@
 // src/controllers/transactionController.js
 const pool = require("../db");
+const budgetService = require("../services/budgetService");
 
 // 🧮 Helper: parse int an toàn
 const toInt = (value, fallback = null) => {
@@ -123,6 +124,14 @@ exports.createTransaction = async (req, res) => {
     const { rows } = await pool.query(insertSql, values);
     const tx = rows[0];
 
+    // 🟡 Sau khi tạo giao dịch → check & log cảnh báo ngân sách
+    try {
+      await budgetService.checkAndLogBudgetAlertsForUser(userId);
+    } catch (err) {
+      console.error("⚠️ checkAndLogBudgetAlertsForUser (create) error:", err);
+      // không throw, tránh làm fail API
+    }
+
     return res.status(201).json({
       status: "success",
       data: tx,
@@ -130,7 +139,6 @@ exports.createTransaction = async (req, res) => {
   } catch (error) {
     console.error("❌ createTransaction error:", error);
 
-    // Lỗi từ trigger validate_tx_category_scope
     if (
       error.message?.includes("Category") ||
       error.message?.includes("Wallet")
@@ -211,9 +219,18 @@ exports.updateTransaction = async (req, res) => {
       });
     }
 
+    const updatedTx = rows[0];
+
+    // 🟡 Sau khi cập nhật giao dịch → check & log cảnh báo ngân sách
+    try {
+      await budgetService.checkAndLogBudgetAlertsForUser(userId);
+    } catch (err) {
+      console.error("⚠️ checkAndLogBudgetAlertsForUser (update) error:", err);
+    }
+
     return res.json({
       status: "success",
-      data: rows[0],
+      data: updatedTx,
     });
   } catch (error) {
     console.error("❌ updateTransaction error:", error);
@@ -269,6 +286,13 @@ exports.deleteTransaction = async (req, res) => {
         status: "error",
         message: "Giao dịch không tồn tại hoặc đã bị xoá trước đó",
       });
+    }
+
+    // 🟡 Sau khi xoá giao dịch → check & log cảnh báo ngân sách
+    try {
+      await budgetService.checkAndLogBudgetAlertsForUser(userId);
+    } catch (err) {
+      console.error("⚠️ checkAndLogBudgetAlertsForUser (delete) error:", err);
     }
 
     return res.json({

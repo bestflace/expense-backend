@@ -4,6 +4,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const errorHandler = require("./middlewares/errorHandler");
 const pool = require("./db");
+require("dotenv").config();
 
 // load .env
 dotenv.config();
@@ -18,7 +19,8 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // test DB nhẹ nhàng (đã connect trong utils/db.js rồi)
 app.get("/health", async (req, res) => {

@@ -60,3 +60,21 @@ exports.listHistory = async (req, res, next) => {
     next(err);
   }
 };
+
+// ... các hàm getCurrentBudget, upsertCurrentBudget, listHistory như cũ
+
+exports.listAlerts = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const days = req.query.days || 30; // ?days=60 nếu muốn đổi
+
+    const alerts = await budgetService.listBudgetAlerts(userId, days);
+
+    res.json({
+      status: "success",
+      data: alerts,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
