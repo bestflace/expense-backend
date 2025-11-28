@@ -7,6 +7,14 @@ const toInt = (value, fallback = null) => {
   const n = parseInt(value, 10);
   return Number.isNaN(n) ? fallback : n;
 };
+// format DATE (JS Date) -> 'YYYY-MM-DD'
+function formatDateYMD(d) {
+  if (!d) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 /**
  * GET /api/transactions
@@ -54,7 +62,7 @@ exports.listTransactions = async (req, res) => {
         t.wallet_id,
         t.amount,
         t.description,
-        t.tx_date,
+        to_char(t.tx_date, 'YYYY-MM-DD') AS tx_date,
         c.category_name,
         c.type AS category_type,
         w.wallet_name
@@ -84,6 +92,22 @@ exports.listTransactions = async (req, res) => {
  * POST /api/transactions
  * Body: { category_id, wallet_id, amount, description, tx_date }
  */
+// helper: chuẩn hóa mọi giá trị tx_date về "YYYY-MM-DD"
+function normalizeToDateString(value) {
+  if (!value) return null;
+
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    // nếu FE gửi linh tinh thì coi như không có -> CURRENT_DATE
+    return null;
+  }
+
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`; // ví dụ 2025-11-28
+}
+
 exports.createTransaction = async (req, res) => {
   const userId = req.user.id;
   const { category_id, wallet_id, amount, description, tx_date } = req.body;
@@ -103,12 +127,15 @@ exports.createTransaction = async (req, res) => {
     });
   }
 
+  // 🔹 CHỖ QUAN TRỌNG: normalize ngày gửi từ FE
+  const txDateStr = normalizeToDateString(tx_date);
+
   try {
     const insertSql = `
       INSERT INTO transactions (
         user_id, category_id, wallet_id, amount, description, tx_date
       )
-      VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE))
+      VALUES ($1, $2, $3, $4, $5, COALESCE($6::date, CURRENT_DATE))
       RETURNING transaction_id, user_id, category_id, wallet_id, amount, description, tx_date
     `;
 
@@ -118,18 +145,18 @@ exports.createTransaction = async (req, res) => {
       wallet_id,
       amt,
       description || null,
-      tx_date || null,
+      txDateStr, // đã normalize, hoặc null
     ];
 
     const { rows } = await pool.query(insertSql, values);
     const tx = rows[0];
 
-    // 🟡 Sau khi tạo giao dịch → check & log cảnh báo ngân sách
+    // sau khi tạo giao dịch → check ngân sách
     try {
       await budgetService.checkAndLogBudgetAlertsForUser(userId);
     } catch (err) {
       console.error("⚠️ checkAndLogBudgetAlertsForUser (create) error:", err);
-      // không throw, tránh làm fail API
+      // không throw để tránh vỡ API
     }
 
     return res.status(201).json({
@@ -184,6 +211,9 @@ exports.updateTransaction = async (req, res) => {
     }
   }
 
+  // 🔹 Normalize ngày update (nếu có)
+  const txDateStr = normalizeToDateString(tx_date);
+
   try {
     const updateSql = `
       UPDATE transactions
@@ -192,12 +222,12 @@ exports.updateTransaction = async (req, res) => {
         wallet_id   = COALESCE($2, wallet_id),
         amount      = COALESCE($3, amount),
         description = COALESCE($4, description),
-        tx_date     = COALESCE($5, tx_date),
+        tx_date     = COALESCE($5::date, tx_date),
         updated_at  = now()
       WHERE transaction_id = $6
         AND user_id = $7
         AND deleted_at IS NULL
-      RETURNING transaction_id, user_id, category_id, wallet_id, amount, description, tx_date
+      RETURNING transaction_id, user_id, category_id, wallet_id, amount, description, to_char(tx_date, 'YYYY-MM-DD') AS tx_date
     `;
 
     const values = [
@@ -205,7 +235,7 @@ exports.updateTransaction = async (req, res) => {
       wallet_id || null,
       amount !== undefined ? Number(amount) : null,
       description || null,
-      tx_date || null,
+      txDateStr, // đã chuẩn hoá, hoặc null -> giữ nguyên giá trị cũ
       id,
       userId,
     ];

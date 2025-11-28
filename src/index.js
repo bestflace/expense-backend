@@ -14,7 +14,7 @@ const app = express();
 // CORS – cho frontend Vite
 app.use(
   cors({
-    origin: "http://localhost:3000", // sau này có domain khác thì sửa
+    origin: process.env.CLIENT_ORIGIN || "http://localhost:3000",
     credentials: true,
   })
 );
@@ -39,6 +39,7 @@ const categoryRoutes = require("./routes/categoryRoutes");
 const transactionRoutes = require("./routes/transactionRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const budgetRoutes = require("./routes/budgetRoutes");
+const chatbotRoutes = require("./routes/chatbotRoutes");
 
 // ====== USE======
 app.use("/api/auth", authRoutes);
@@ -47,6 +48,7 @@ app.use("/api/categories", categoryRoutes);
 app.use("/api/transactions", transactionRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/budgets", budgetRoutes);
+app.use("/api/chatbot", chatbotRoutes);
 // Middleware handle lỗi đặt cuối cùng
 app.use(errorHandler);
 
