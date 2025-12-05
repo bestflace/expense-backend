@@ -337,3 +337,219 @@ exports.deleteTransaction = async (req, res) => {
     });
   }
 };
+/**
+ * GET /api/transactions/trash
+ * => danh sách giao dịch đã xoá mềm
+ */
+exports.listDeletedTransactions = async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const sql = `
+      SELECT
+        t.transaction_id,
+        t.category_id,
+        t.wallet_id,
+        t.amount,
+        t.description,
+        to_char(t.tx_date, 'YYYY-MM-DD') AS tx_date,
+        t.deleted_at,
+        c.category_name,
+        c.type AS category_type,
+        w.wallet_name
+      FROM transactions t
+      JOIN categories c ON c.category_id = t.category_id
+      JOIN wallets   w ON w.wallet_id   = t.wallet_id
+      WHERE t.user_id = $1
+        AND t.deleted_at IS NOT NULL
+      ORDER BY t.deleted_at DESC, t.tx_date DESC, t.transaction_id DESC
+      LIMIT 200
+    `;
+
+    const { rows } = await pool.query(sql, [userId]);
+
+    return res.json({
+      status: "success",
+      data: rows,
+    });
+  } catch (error) {
+    console.error("❌ listDeletedTransactions error:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "Lỗi server khi lấy giỏ rác giao dịch",
+    });
+  }
+};
+
+/**
+ * POST /api/transactions/:id/restore
+ * => khôi phục giao dịch (deleted_at = NULL)
+ */
+
+exports.restoreTransaction = async (req, res) => {
+  const userId = req.user.id;
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({
+      status: "error",
+      message: "Thiếu transaction id",
+    });
+  }
+
+  // format tiền giống các API khác
+  const formatCurrency = (value) =>
+    new Intl.NumberFormat("vi-VN").format(Number(value || 0)) + "đ";
+
+  let client;
+
+  try {
+    client = await pool.connect();
+    await client.query("BEGIN");
+
+    // 1. Lấy giao dịch đang ở giỏ rác + loại (income/expense) + số dư ví hiện tại
+    const selectSql = `
+      SELECT
+        t.transaction_id,
+        t.amount,
+        t.wallet_id,
+        t.deleted_at,
+        c.type    AS category_type,
+        w.balance AS wallet_balance      -- balance NUMERIC(14,2)
+      FROM transactions t
+      JOIN categories c ON c.category_id = t.category_id
+      JOIN wallets   w ON w.wallet_id   = t.wallet_id
+      WHERE t.transaction_id = $1
+        AND t.user_id = $2
+        AND t.deleted_at IS NOT NULL
+      FOR UPDATE
+    `;
+
+    const { rows } = await client.query(selectSql, [id, userId]);
+
+    if (rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        status: "error",
+        message: "Giao dịch không tồn tại hoặc không nằm trong giỏ rác",
+      });
+    }
+
+    const txRow = rows[0];
+
+    // 2. Nếu là chi tiêu thì kiểm tra xem có làm ví âm không
+    if (txRow.category_type === "expense") {
+      const amount = Number(txRow.amount || 0); // NUMERIC -> Number
+      const walletBalance = Number(txRow.wallet_balance); // NUMERIC -> Number
+
+      if (amount > walletBalance) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          status: "error",
+          code: "INSUFFICIENT_BALANCE",
+          message:
+            "Giao dịch này sẽ làm số dư ví của bạn âm. Số dư hiện tại: " +
+            formatCurrency(walletBalance),
+        });
+      }
+    }
+
+    // 3. Khôi phục giao dịch (deleted_at = NULL)
+    const restoreSql = `
+      UPDATE transactions
+      SET deleted_at = NULL,
+          updated_at = now()
+      WHERE transaction_id = $1
+        AND user_id = $2
+        AND deleted_at IS NOT NULL
+      RETURNING transaction_id
+    `;
+
+    const restoreResult = await client.query(restoreSql, [id, userId]);
+
+    if (restoreResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        status: "error",
+        message: "Giao dịch không tồn tại hoặc không nằm trong giỏ rác",
+      });
+    }
+
+    await client.query("COMMIT");
+
+    // 4. Check lại budget (không để vỡ response nếu lỗi)
+    try {
+      await budgetService.checkAndLogBudgetAlertsForUser(userId);
+    } catch (err) {
+      console.error("⚠️ checkAndLogBudgetAlertsForUser (restore) error:", err);
+    }
+
+    return res.json({
+      status: "success",
+      message: "Khôi phục giao dịch thành công",
+    });
+  } catch (error) {
+    console.error("❌ restoreTransaction error:", error);
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (e) {
+        console.error("rollback error:", e);
+      }
+    }
+    return res.status(500).json({
+      status: "error",
+      message: "Lỗi server khi khôi phục giao dịch",
+    });
+  } finally {
+    if (client) client.release();
+  }
+};
+
+/**
+ * DELETE /api/transactions/:id/force
+ * => xoá vĩnh viễn một giao dịch trong giỏ rác
+ * (chỉ xóa những cái đã deleted_at != NULL để tránh lệch số dư)
+ */
+exports.forceDeleteTransaction = async (req, res) => {
+  const userId = req.user.id;
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({
+      status: "error",
+      message: "Thiếu transaction id",
+    });
+  }
+
+  try {
+    const sql = `
+      DELETE FROM transactions
+      WHERE transaction_id = $1
+        AND user_id = $2
+        AND deleted_at IS NOT NULL
+      RETURNING transaction_id
+    `;
+
+    const { rows } = await pool.query(sql, [id, userId]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        status: "error",
+        message: "Giao dịch không tồn tại trong giỏ rác",
+      });
+    }
+
+    // Xóa vĩnh viễn giao dịch đã soft delete: không ảnh hưởng ví/budget
+    return res.json({
+      status: "success",
+      message: "Đã xoá vĩnh viễn giao dịch",
+    });
+  } catch (error) {
+    console.error("❌ forceDeleteTransaction error:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "Lỗi server khi xoá vĩnh viễn giao dịch",
+    });
+  }
+};

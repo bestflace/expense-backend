@@ -17,7 +17,16 @@ router.post("/", transactionController.createTransaction);
 // Cập nhật giao dịch
 router.put("/:id", transactionController.updateTransaction);
 
+// 🔹 LẤY GIỎ RÁC
+router.get("/trash", transactionController.listDeletedTransactions);
+
+// 🔹 KHÔI PHỤC
+router.post("/:id/restore", transactionController.restoreTransaction);
+
 // Xoá mềm giao dịch
 router.delete("/:id", transactionController.deleteTransaction);
+
+// 🔹 XOÁ VĨNH VIỄN (chỉ những cái đã soft delete)
+router.delete("/:id/force", transactionController.forceDeleteTransaction);
 
 module.exports = router;

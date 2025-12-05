@@ -121,6 +121,7 @@ async function createCategory(userId, payload) {
 /**
  * Cập nhật category của user
  */
+// src/services/categoryService.js
 async function updateCategory(userId, categoryId, updates) {
   categoryId = Number(categoryId);
   if (Number.isNaN(categoryId)) {
@@ -129,7 +130,7 @@ async function updateCategory(userId, categoryId, updates) {
     throw err;
   }
 
-  // Lấy category hiện tại
+  // 1️⃣ Lấy category hiện tại
   const { rows: existedRows } = await pool.query(
     `
       SELECT *
@@ -161,9 +162,42 @@ async function updateCategory(userId, categoryId, updates) {
     throw err;
   }
 
+  // 2️⃣ TÍNH type mới trước
+  // - Nếu FE không gửi type -> giữ nguyên
+  // - Nếu FE gửi type khác type cũ -> kiểm tra giao dịch trước khi cho đổi
+  const requestedType =
+    updates.type != null && updates.type !== undefined
+      ? updates.type
+      : current.type;
+
+  // Nếu FE gửi type và nó khác type hiện tại -> chặn nếu đã có giao dịch
+  if (updates.type && updates.type !== current.type) {
+    const { rows: txRows } = await pool.query(
+      `
+        SELECT 1
+        FROM transactions
+        WHERE user_id = $1
+          AND category_id = $2
+          AND deleted_at IS NULL
+        LIMIT 1
+      `,
+      [userId, categoryId]
+    );
+
+    if (txRows.length > 0) {
+      const err = new Error(
+        "Không thể thay đổi loại danh mục (thu nhập/chi tiêu) vì đang có giao dịch sử dụng danh mục này. Vui lòng tạo danh mục mới."
+      );
+      err.status = 400;
+      err.code = "CATEGORY_TYPE_HAS_TRANSACTIONS";
+      throw err;
+    }
+  }
+
+  // 3️⃣ Tính các field mới (tên, icon, màu...)
   let newName =
     updates.name != null ? updates.name.trim() : current.category_name;
-  let newType = updates.type || current.type;
+  let newType = requestedType; // dùng requestedType ở trên
   let newIcon = updates.icon != null ? updates.icon : current.icon;
   let newColor = updates.color != null ? updates.color : current.color;
 
