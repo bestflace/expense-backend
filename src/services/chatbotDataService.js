@@ -317,6 +317,9 @@ exports.getTopBigExpenses = async (userId, monthOffset = 0, limit = 3) => {
   };
 };
 
+/**
+ * Top N giao dịch thu nhập lớn nhất trong tháng
+ */
 exports.getTopBigIncomes = async (userId, monthOffset = 0, limit = 3) => {
   const { startDate, endDate, month, year } = getMonthRange(monthOffset);
 
@@ -350,43 +353,6 @@ exports.getTopBigIncomes = async (userId, monthOffset = 0, limit = 3) => {
     month,
     year,
     label: formatMonthLabel(month, year),
-  };
-};
-
-/**
- * Top N giao dịch thu nhập lớn nhất trong tháng
- */
-exports.getTopBigIncomes = async (userId, monthOffset = 0, limit = 3) => {
-  const { startDate, endDate } = getMonthRange(monthOffset);
-
-  const result = await pool.query(
-    `
-    SELECT
-      t.transaction_id,
-      t.tx_date,
-      t.amount,
-      t.description,
-      c.category_name,
-      w.wallet_name
-    FROM transactions t
-    JOIN categories c ON c.category_id = t.category_id
-    JOIN wallets    w ON w.wallet_id    = t.wallet_id
-    WHERE t.user_id = $1
-      AND t.deleted_at IS NULL
-      AND c.type = 'income'
-      AND t.tx_date >= $2::date
-      AND t.tx_date <  $3::date
-    ORDER BY t.amount DESC
-    LIMIT $4
-    `,
-    [userId, startDate, endDate, limit]
-  );
-
-  return {
-    items: result.rows,
-    startDate,
-    endDate,
-    label: formatMonthLabel(startDate),
   };
 };
 
