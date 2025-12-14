@@ -10,6 +10,7 @@ function mapWalletRow(row) {
     icon: row.icon,
     type: row.type,
     balance: Number(row.balance),
+    color: row.color,
     isArchived: row.is_archived,
     createdAt: row.created_at,
   };
@@ -30,7 +31,7 @@ async function getWalletsByUser(userId) {
 async function createWallet(userId, payload) {
   // chấp nhận name, wallet_name, walletName
   let name = payload.name || payload.wallet_name || payload.walletName || "";
-
+  const color = payload.color || "#4ECDC4";
   name = name.trim();
   if (!name) {
     const err = new Error("Tên ví là bắt buộc");
@@ -51,8 +52,8 @@ async function createWallet(userId, payload) {
   }
 
   const sql = `
-    INSERT INTO wallets (user_id, wallet_name, description, icon, type, balance)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO wallets (user_id, wallet_name, description, icon, type, balance, color)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING *
   `;
 
@@ -63,13 +64,14 @@ async function createWallet(userId, payload) {
     icon || null,
     type,
     initialBalance,
+    color,
   ]);
 
   return mapWalletRow(rows[0]);
 }
 
 async function updateWallet(userId, walletId, updates) {
-  const { name, description, icon, type, balance } = updates;
+  const { name, description, icon, type, balance, color } = updates;
 
   // kiểm tra ví có thuộc user không
   const { rows: existedRows } = await pool.query(
@@ -97,8 +99,9 @@ async function updateWallet(userId, walletId, updates) {
         icon        = $3,
         type        = $4,
         balance     = $5,
+        color       = $6,
         updated_at  = now()
-    WHERE wallet_id = $6 AND user_id = $7
+    WHERE wallet_id = $7 AND user_id = $8
     RETURNING *
   `;
 
@@ -108,6 +111,7 @@ async function updateWallet(userId, walletId, updates) {
     icon != null ? icon : current.icon,
     type != null ? type : current.type,
     balance != null ? Number(balance) : current.balance,
+    color != null ? color : current.color,
     walletId,
     userId,
   ]);
