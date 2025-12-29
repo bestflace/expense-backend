@@ -194,12 +194,88 @@ async function updateCategory(userId, categoryId, updates) {
     }
   }
 
-  // 3️⃣ Tính các field mới (tên, icon, màu...)
+  // 3️⃣ Tính các field mới (tên, icon, màu, parent...)
   let newName =
     updates.name != null ? updates.name.trim() : current.category_name;
-  let newType = requestedType; // dùng requestedType ở trên
+
+  let newType = requestedType;
   let newIcon = updates.icon != null ? updates.icon : current.icon;
   let newColor = updates.color != null ? updates.color : current.color;
+
+  // parent: nếu FE không gửi => giữ nguyên
+  let newParentId =
+    updates.parentCategoryId !== undefined
+      ? updates.parentCategoryId
+      : current.parent_category_id;
+
+  if (newParentId === "" || newParentId === "null") newParentId = null;
+
+  if (newParentId != null) {
+    newParentId = Number(newParentId);
+    if (Number.isNaN(newParentId)) {
+      const err = new Error("parentCategoryId không hợp lệ");
+      err.status = 400;
+      throw err;
+    }
+
+    if (newParentId === categoryId) {
+      const err = new Error("Danh mục cha không hợp lệ");
+      err.status = 400;
+      throw err;
+    }
+
+    // ✅ nếu category hiện tại đang là parent và có con -> không cho biến thành con (tránh cây 3 tầng)
+    const { rows: childRows } = await pool.query(
+      `SELECT 1 FROM categories WHERE parent_category_id = $1 LIMIT 1`,
+      [categoryId]
+    );
+    if (childRows.length > 0) {
+      const err = new Error(
+        "Không thể chuyển danh mục cha thành danh mục con vì đang có danh mục con."
+      );
+      err.status = 400;
+      throw err;
+    }
+
+    // ✅ validate parent tồn tại + đúng type + parent phải là category cha
+    const { rows: pRows } = await pool.query(
+      `SELECT category_id, user_id, type, parent_category_id
+       FROM categories
+       WHERE category_id = $1`,
+      [newParentId]
+    );
+
+    if (pRows.length === 0) {
+      const err = new Error("Danh mục cha không tồn tại");
+      err.status = 404;
+      throw err;
+    }
+
+    const parent = pRows[0];
+
+    // parent phải là category cha (không có parent)
+    if (parent.parent_category_id != null) {
+      const err = new Error("Danh mục cha không hợp lệ");
+      err.status = 400;
+      throw err;
+    }
+
+    // parent phải cùng type
+    if (parent.type !== newType) {
+      const err = new Error(
+        "Loại danh mục con phải trùng với danh mục cha (income/expense)"
+      );
+      err.status = 400;
+      throw err;
+    }
+
+    // parent phải thuộc user hoặc global
+    if (parent.user_id !== null && parent.user_id !== userId) {
+      const err = new Error("Bạn không có quyền dùng danh mục cha này");
+      err.status = 403;
+      throw err;
+    }
+  }
 
   if (!newName) {
     const err = new Error("Tên danh mục không được để trống");
@@ -215,12 +291,13 @@ async function updateCategory(userId, categoryId, updates) {
 
   const sql = `
     UPDATE categories
-    SET category_name = $1,
-        type          = $2,
-        icon          = $3,
-        color         = $4,
-        updated_at    = now()
-    WHERE category_id = $5 AND user_id = $6
+    SET category_name      = $1,
+        type               = $2,
+        icon               = $3,
+        color              = $4,
+        parent_category_id = $5,
+        updated_at         = now()
+    WHERE category_id = $6 AND user_id = $7
     RETURNING *
   `;
 
@@ -229,6 +306,7 @@ async function updateCategory(userId, categoryId, updates) {
     newType,
     newIcon,
     newColor,
+    newParentId,
     categoryId,
     userId,
   ]);

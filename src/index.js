@@ -12,9 +12,33 @@ dotenv.config();
 const app = express();
 
 // CORS – cho frontend Vite
+// app.use(
+//   cors({
+//     origin: process.env.CLIENT_ORIGIN || "http://localhost:3001",
+//     credentials: true,
+//   })
+// );
+const allowedOrigins = [
+  process.env.CLIENT_ORIGIN, // web vite (nếu có)
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+  "http://localhost:19006", // expo web/debug
+  "http://127.0.0.1:19006",
+];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_ORIGIN || "http://localhost:3001",
+    origin: (origin, cb) => {
+      // origin undefined = requests từ mobile/native hoặc Postman
+      if (!origin) return cb(null, true);
+
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+
+      // Cho phép mọi origin trong dev nếu bạn muốn nhanh:
+      // return cb(null, true);
+
+      return cb(new Error(`CORS blocked: ${origin}`));
+    },
     credentials: true,
   })
 );
@@ -54,18 +78,19 @@ app.use(errorHandler);
 
 // Start server
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server listening on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server listening on http://0.0.0.0:${PORT}`);
 });
+
 // Middleware bắt lỗi cuối cùng
-app.use((err, req, res, next) => {
-  console.error("Unhandled error:", err);
+// app.use((err, req, res, next) => {
+//   console.error("Unhandled error:", err);
 
-  const status = err.status || 500;
+//   const status = err.status || 500;
 
-  res.status(status).json({
-    status: "error",
-    message: err.message || "Lỗi server",
-  });
-});
+//   res.status(status).json({
+//     status: "error",
+//     message: err.message || "Lỗi server",
+//   });
+// });
 module.exports = app;
