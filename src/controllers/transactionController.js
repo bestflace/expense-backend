@@ -151,9 +151,9 @@ exports.createTransaction = async (req, res) => {
     const { rows } = await pool.query(insertSql, values);
     const tx = rows[0];
 
-    // sau khi tạo giao dịch → check ngân sách
+    // sau khi tạo giao dịch → check ngân sách tháng của giao dịch
     try {
-      await budgetService.checkAndLogBudgetAlertsForUser(userId);
+      await budgetService.checkAndLogBudgetAlertsForUser(userId, tx.tx_date);
     } catch (err) {
       console.error("⚠️ checkAndLogBudgetAlertsForUser (create) error:", err);
       // không throw để tránh vỡ API
@@ -253,7 +253,10 @@ exports.updateTransaction = async (req, res) => {
 
     // 🟡 Sau khi cập nhật giao dịch → check & log cảnh báo ngân sách
     try {
-      await budgetService.checkAndLogBudgetAlertsForUser(userId);
+      await budgetService.checkAndLogBudgetAlertsForUser(
+        userId,
+        updatedTx.tx_date
+      );
     } catch (err) {
       console.error("⚠️ checkAndLogBudgetAlertsForUser (update) error:", err);
     }
@@ -301,13 +304,13 @@ exports.deleteTransaction = async (req, res) => {
 
   try {
     const deleteSql = `
-      UPDATE transactions
-      SET deleted_at = now(), updated_at = now()
-      WHERE transaction_id = $1
-        AND user_id = $2
-        AND deleted_at IS NULL
-      RETURNING transaction_id
-    `;
+  UPDATE transactions
+  SET deleted_at = now(), updated_at = now()
+  WHERE transaction_id = $1
+    AND user_id = $2
+    AND deleted_at IS NULL
+  RETURNING transaction_id, tx_date
+`;
 
     const { rows } = await pool.query(deleteSql, [id, userId]);
 
@@ -318,9 +321,14 @@ exports.deleteTransaction = async (req, res) => {
       });
     }
 
-    // 🟡 Sau khi xoá giao dịch → check & log cảnh báo ngân sách
+    const deletedTx = rows[0];
+
+    // 🟡 Sau khi xoá giao dịch → check & log cảnh báo ngân sách (tháng của giao dịch)
     try {
-      await budgetService.checkAndLogBudgetAlertsForUser(userId);
+      await budgetService.checkAndLogBudgetAlertsForUser(
+        userId,
+        deletedTx.tx_date
+      );
     } catch (err) {
       console.error("⚠️ checkAndLogBudgetAlertsForUser (delete) error:", err);
     }
@@ -413,6 +421,7 @@ exports.restoreTransaction = async (req, res) => {
         t.transaction_id,
         t.amount,
         t.wallet_id,
+         t.tx_date,
         t.deleted_at,
         c.type    AS category_type,
         w.balance AS wallet_balance      -- balance NUMERIC(14,2)
@@ -436,6 +445,7 @@ exports.restoreTransaction = async (req, res) => {
     }
 
     const txRow = rows[0];
+    const txDate = txRow.tx_date;
 
     // 2. Nếu là chi tiêu thì kiểm tra xem có làm ví âm không
     if (txRow.category_type === "expense") {
@@ -479,7 +489,7 @@ exports.restoreTransaction = async (req, res) => {
 
     // 4. Check lại budget (không để vỡ response nếu lỗi)
     try {
-      await budgetService.checkAndLogBudgetAlertsForUser(userId);
+      await budgetService.checkAndLogBudgetAlertsForUser(userId, txDate);
     } catch (err) {
       console.error("⚠️ checkAndLogBudgetAlertsForUser (restore) error:", err);
     }

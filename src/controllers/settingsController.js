@@ -42,3 +42,23 @@ exports.updateMySettings = async (req, res, next) => {
     next(err);
   }
 };
+exports.updateMyAvatar = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    if (!req.file) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Thiếu file avatar" });
+    }
+
+    // Lưu relative path vào DB
+    const avatarUrl = `/uploads/avatars/${req.file.filename}`;
+
+    const data = await settingsService.updateAvatarUrl(userId, avatarUrl);
+
+    return res.json({ status: "success", data });
+  } catch (err) {
+    next(err);
+  }
+};

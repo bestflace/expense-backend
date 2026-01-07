@@ -46,6 +46,17 @@ async function getSettingsByUser(userId) {
 
   return mapSettingsRow(fallbackRows[0]);
 }
+async function updateAvatarUrl(userId, avatarUrl) {
+  const { rows } = await pool.query(
+    `UPDATE users
+     SET avatar_url = $2, updated_at = now()
+     WHERE user_id = $1
+     RETURNING user_id, user_name, email, phone, bio, avatar_url`,
+    [userId, avatarUrl]
+  );
+
+  return rows[0];
+}
 
 // Cập nhật dark_mode + locale (+ timezone nếu muốn)
 async function updateSettings(userId, payload) {
@@ -69,4 +80,5 @@ async function updateSettings(userId, payload) {
 module.exports = {
   getSettingsByUser,
   updateSettings,
+  updateAvatarUrl,
 };

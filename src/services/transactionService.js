@@ -23,7 +23,7 @@ async function createTransaction(userId, payload) {
 
   const result = await pool.query(
     `INSERT INTO transactions (user_id, category_id, wallet_id, amount, description, tx_date)
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE))
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::date, CURRENT_DATE))
      RETURNING transaction_id, user_id, category_id, wallet_id, amount, description, tx_date`,
     [
       userId,
@@ -39,7 +39,7 @@ async function createTransaction(userId, payload) {
 
   // 👉 SAU KHI TẠO GIAO DỊCH: kiểm tra budget (không chặn response nếu lỗi)
   budgetService
-    .checkAndLogBudgetAlertsForUser(userId)
+    .checkAndLogBudgetAlertsForUser(userId, tx.tx_date)
     .catch((err) =>
       console.error("check budget alert error (createTransaction):", err)
     );
@@ -194,14 +194,23 @@ async function updateTransaction(userId, transactionId, payload) {
     UPDATE transactions
     SET ${fields.join(", ")}, updated_at = now()
     WHERE transaction_id = $${idx++} AND user_id = $${idx}
-    RETURNING transaction_id
+    RETURNING transaction_id, tx_date
   `;
 
-  await pool.query(sql, params);
+  // ✅ Thực thi UPDATE trong DB
+  const { rows } = await pool.query(sql, params);
+  if (rows.length === 0) {
+    const err = new Error("NOT_FOUND");
+    err.type = "NOT_FOUND";
+    throw err;
+  }
 
-  // kiểm tra lại budget sau update
+  const updatedRow = rows[0];
+  const targetDate = payload.txDate || updatedRow.tx_date || existing.tx_date;
+
+  // ✅ Kiểm tra lại budget theo THÁNG của giao dịch
   budgetService
-    .checkAndLogBudgetAlertsForUser(userId)
+    .checkAndLogBudgetAlertsForUser(userId, targetDate)
     .catch((err) =>
       console.error("check budget alert error (updateTransaction):", err)
     );
@@ -216,11 +225,11 @@ async function updateTransaction(userId, transactionId, payload) {
 async function softDeleteTransaction(userId, transactionId) {
   const result = await pool.query(
     `
-    UPDATE transactions
-    SET deleted_at = now(), updated_at = now()
-    WHERE transaction_id = $1 AND user_id = $2 AND deleted_at IS NULL
-    RETURNING transaction_id
-    `,
+  UPDATE transactions
+  SET deleted_at = now(), updated_at = now()
+  WHERE transaction_id = $1 AND user_id = $2 AND deleted_at IS NULL
+  RETURNING transaction_id, tx_date
+  `,
     [transactionId, userId]
   );
 
@@ -230,9 +239,11 @@ async function softDeleteTransaction(userId, transactionId) {
     throw err;
   }
 
-  // trigger DB đã rollback ví, giờ check lại budget
+  const deletedTx = result.rows[0];
+
+  // trigger DB đã rollback ví, giờ check lại budget (tháng của giao dịch)
   budgetService
-    .checkAndLogBudgetAlertsForUser(userId)
+    .checkAndLogBudgetAlertsForUser(userId, deletedTx.tx_date)
     .catch((err) =>
       console.error("check budget alert error (softDeleteTransaction):", err)
     );

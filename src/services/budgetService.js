@@ -19,6 +19,37 @@ function mapBudgetRow(row, extra = {}) {
     ...extra,
   };
 }
+function normalizeMonthDate(input) {
+  const now = new Date();
+
+  if (!input) {
+    // không truyền gì -> lấy tháng hiện tại
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+
+  if (input instanceof Date) {
+    return new Date(input.getFullYear(), input.getMonth(), 1);
+  }
+
+  if (typeof input === "string") {
+    // hỗ trợ "YYYY-MM-DD" hoặc "YYYY-MM-DDT..."
+    const onlyDate = input.slice(0, 10);
+    const [yStr, mStr] = onlyDate.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr);
+    if (y && m) {
+      return new Date(y, m - 1, 1);
+    }
+  }
+
+  const d = new Date(input);
+  if (!Number.isNaN(d.getTime())) {
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  }
+
+  // fallback
+  return new Date(now.getFullYear(), now.getMonth(), 1);
+}
 
 /**
  * Lấy budget tháng hiện tại (global – tất cả chi tiêu, mọi ví)
@@ -201,27 +232,69 @@ async function listBudgetHistory(userId, months = 6) {
  * Check & log cảnh báo khi user tạo/sửa/xoá giao dịch
  * (để không spam lỗi, việc log lỗi không throw ra ngoài)
  */
-async function checkAndLogBudgetAlertsForUser(userId, client = pool) {
-  // 1. Lấy budget hiện tại có bật notify
+/**
+ * Check & log cảnh báo khi user tạo/sửa/xoá/khôi phục giao dịch
+ *
+ * ✅ Hỗ trợ:
+ *  - userId: bắt buộc
+ *  - arg2: có thể là targetDate (Date | string) HOẶC client (pool client)
+ *  - arg3: nếu truyền, là client
+ *
+ * => Tương thích ngược:
+ *  - checkAndLogBudgetAlertsForUser(userId)              // dùng tháng hiện tại
+ *  - checkAndLogBudgetAlertsForUser(userId, client)      // dùng client, tháng hiện tại
+ *  - checkAndLogBudgetAlertsForUser(userId, txDate)      // dùng tháng của giao dịch
+ *  - checkAndLogBudgetAlertsForUser(userId, txDate, client)
+ */
+async function checkAndLogBudgetAlertsForUser(userId, arg2, arg3) {
+  let targetDate = null;
+  let client = pool;
+
+  // arg2 có thể là date hoặc client
+  if (arg2) {
+    if (typeof arg2.query === "function") {
+      // arg2 là client
+      client = arg2;
+    } else {
+      // arg2 là ngày (Date | string)
+      targetDate = arg2;
+    }
+  }
+
+  // arg3 nếu truyền thêm thì chắc chắn là client
+  if (arg3 && typeof arg3.query === "function") {
+    client = arg3;
+  }
+
+  // 🔹 Lấy ngày đầu tháng của tháng cần check (tháng giao dịch)
+  // 🔹 Lấy ngày đầu tháng của tháng cần check (tháng giao dịch)
+  const monthDate = normalizeMonthDate(targetDate);
+
+  // Lấy YYYY-MM-01 theo local time, tránh lệch timezone
+  const y = monthDate.getFullYear();
+  const m = String(monthDate.getMonth() + 1).padStart(2, "0");
+  const monthDateStr = `${y}-${m}-01`; // ví dụ: "2025-02-01"
+
+  // 1. Lấy budget của tháng đó có bật notify
   const { rows: budgetRows } = await client.query(
     `
     SELECT *
     FROM budgets
     WHERE user_id = $1
-      AND month = date_trunc('month', CURRENT_DATE)::date
+      AND month = date_trunc('month', $2::date)::date
       AND category_id IS NULL
       AND wallet_id IS NULL
       AND (notify_in_app = true OR notify_email = true)
     LIMIT 1
     `,
-    [userId]
+    [userId, monthDateStr]
   );
 
-  if (budgetRows.length === 0) return; // chưa set hạn mức
+  if (budgetRows.length === 0) return; // chưa set hạn mức cho tháng này
 
   const b = budgetRows[0];
 
-  // 2. Tính tổng chi tiêu tháng này
+  // 2. Tính tổng chi tiêu trong THÁNG CỦA GIAO DỊCH
   const { rows: spendRows } = await client.query(
     `
     SELECT COALESCE(SUM(t.amount), 0) AS total
@@ -230,10 +303,10 @@ async function checkAndLogBudgetAlertsForUser(userId, client = pool) {
     WHERE t.user_id = $1
       AND t.deleted_at IS NULL
       AND c.type = 'expense'
-      AND t.tx_date >= date_trunc('month', CURRENT_DATE)::date
-      AND t.tx_date <  (date_trunc('month', CURRENT_DATE) + interval '1 month')::date
+      AND t.tx_date >= date_trunc('month', $2::date)::date
+      AND t.tx_date <  (date_trunc('month', $2::date) + interval '1 month')::date
     `,
-    [userId]
+    [userId, monthDateStr]
   );
 
   const spent = Number(spendRows[0].total);
@@ -250,6 +323,7 @@ async function checkAndLogBudgetAlertsForUser(userId, client = pool) {
   if (percentage >= b.alert_threshold) thresholdsToLog.add(b.alert_threshold);
   if (percentage >= 100) thresholdsToLog.add(101); // 101 = vượt 100%
 
+  // ngày hôm nay (log / gửi mail theo NGÀY hiện tại, đúng yêu cầu "1 ngày")
   const today = new Date().toISOString().slice(0, 10); // yyyy-mm-dd
 
   // Lấy thông tin user để gửi email
@@ -266,13 +340,14 @@ async function checkAndLogBudgetAlertsForUser(userId, client = pool) {
     }
   }
 
-  const monthLabelVi = new Date().toLocaleDateString("vi-VN", {
+  // label tháng đúng với tháng của giao dịch
+  const monthLabelVi = monthDate.toLocaleDateString("vi-VN", {
     month: "long",
     year: "numeric",
   });
 
   for (const thr of thresholdsToLog) {
-    // 4.1. Log in-app (chỉ để lưu lịch sử, FE vẫn có thể tự tính toast)
+    // 4.1. Log in-app (chỉ để lưu lịch sử)
     if (b.notify_in_app) {
       await client.query(
         `
